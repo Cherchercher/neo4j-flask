@@ -1,0 +1,44 @@
+version: "3"
+
+services:
+  testdb:
+    image: neo4j:latest
+    env_file:
+      - ".env"
+      - ".testenv"
+    ports:
+      - "7475:7475"
+      - "7688:7688"
+    volumes:
+      - "testdb:/data"
+
+  db:
+    image: neo4j:latest
+    env_file:
+      - ".env"
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - "db:/data"
+
+  web:
+    build: .
+    command: >
+      gunicorn -c gunicorn.py --reload "zocdoc-cc.app:create_app()"
+    depends_on:
+      - "db"
+      - "testdb"
+    env_file:
+      - ".env"
+    ports:
+      - "80:80"
+    volumes:
+      - ".:/app"
+    links:
+      - "db:db"
+      - "testdb:testdb"
+
+volumes:
+  db:
+  testdb:
