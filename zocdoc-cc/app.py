@@ -161,58 +161,61 @@ class DoctorList(Resource):
         }
     })
     def get(self):
-        def get_doctors(tx, criteriaStr, sortStr, language, insurance, specialty, skip=0, limit=50):
+        def get_doctors(tx, criteriaStr, sortStr, language, insurance, specialty, lat, lng, skip=0, limit=50):
             if criteriaStr != "":
                 return list(tx.run(
                     """
-                    MATCH (doctor:Doctor)
-                    WITH doctor
-                    Skip toInteger($skip) LIMIT toInteger($limit)
-                    MATCH (doctor)-[r]-(l)
+                    MATCH (doctor:Doctor)-[r1:HAS_ADDRESS]-(a:Address)
                     """ +
                     criteriaStr +
                     """
-                    with doctor, [type(r), l] as relation, ID(doctor) as id
+                    WITH doctor, a
                     """ +
                     sortStr +
                     """
+                    MATCH (doctor)-[r]-(l)
+                    with doctor, a, [type(r), l] as relation, ID(doctor) as id
+                   
                     return { root: doctor, relations: collect(relation), id: id }
-
-                    """, {'limit': limit, 'language': language, 'insurance': insurance, 'specialty': specialty, 'skip': skip}
+                    Skip toInteger($skip) LIMIT toInteger($limit)
+              
+                    """, {'limit': limit, 'language': language, 'insurance': insurance, 'specialty': specialty, 'skip': skip, 'lat': lat, 'lng': lng}
                 ).data())
 
             else:
                 return list(tx.run(
                     """
-                    MATCH (doctor:Doctor)
-                    WITH doctor
-                    Skip toInteger($skip) LIMIT toInteger($limit)
+                    MATCH (doctor:Doctor)-[r1:HAS_ADDRESS]-(a:Address)
+                    WITH doctor, a
                     MATCH (doctor)-[r]-(l)
-                    with doctor, [type(r), l] as relation, ID(doctor) as id
+                    with doctor, a, [type(r), l] as relation, ID(doctor) as id
                     """ +
                     sortStr +
                     """
                     return { root: doctor, relations: collect(relation), id: id }
+                    Skip toInteger($skip) LIMIT toInteger($limit)
                     """, {'limit': limit, 'skip': skip}
                 ).data())
 
-        def get_doctors_count(tx, criteriaStr, language, insurance, specialty):
+        def get_doctors_count(tx, criteriaStr, language, insurance, specialty, lat, lng):
             if criteriaStr == "":
                 return list(tx.run(
                     '''
-                    MATCH (doctor:Doctor)-[r]-(l)
+                    MATCH (doctor:Doctor)-[r1:HAS_ADDRESS]-(a:Address)
                     RETURN COUNT(DISTINCT(doctor)) AS count
                     '''
                 ).data())
             else:
                 return list(tx.run(
                     '''
-                    MATCH (doctor:Doctor)-[r]-(l)
+                    MATCH (doctor:Doctor)-[r1:HAS_ADDRESS]-(a:Address)
+                    with doctor, a
+                    MATCH (doctor)-[r]-(l)
                     ''' +
                     criteriaStr +
                     '''
                     RETURN COUNT(DISTINCT(doctor)) AS count
-                    ''', {'language': language, 'insurance': insurance, 'specialty': specialty}
+                    ''', {'language': language, 'insurance': insurance, 'specialty': specialty, 'lat': lat, 'lng': lng}
                 ).data())
 
         skip = request.args.get('skip')
@@ -221,13 +224,21 @@ class DoctorList(Resource):
         language = request.args.get('language')
         specialty = request.args.get('specialty')
         sort_by = request.args.get('sort_by')
+        within = request.args.get('meter')
+        lat = request.args.get('lat')
+        lng = request.args.get('lng')
+        meter = 80000
+        if within:
+            meter = within
         sortStr = ""
         if sort_by == 'overall_rating':
-            sortStr = "ORDER BY doctor.overall_rating DESC"
+            sortStr = "ORDER BY coalesce(doctor.overall_rating, 0) DESC"
         if sort_by == 'bedside_manner':
-            sortStr = "ORDER BY doctor.bedside_manner DESC"
+            sortStr = "ORDER BY coalesce(doctor.bedside_manner, 0) DESC"
         if sort_by == 'wait_time':
-            sortStr = "ORDER BY doctor.wait_time DESC"
+            sortStr = "ORDER BY coalesce(doctor.wait_time, 0) DESC"
+        if sort_by == "distance":
+            sortStr = "ORDER BY distance(point({latitude: toFloat(a.lat), longitude:toFloat(a.lng)}), point({latitude: toFloat($lat), longitude:  toFloat($lng)}))"
         criteria = []
         criteriaValue = []
         criteriaStr = ""
@@ -235,6 +246,7 @@ class DoctorList(Resource):
             criteria.append(" (doctor)-[:SPECIALIZE_IN]->(specialty)")
             criteriaValue.append(
                 "toLower(specialty.name) = toLower($specialty)")
+
         if insurance:
             criteria.append(" (doctor)-[:SUPPORTS_INSUR]->(insurance)")
             criteriaValue.append(
@@ -255,16 +267,25 @@ class DoctorList(Resource):
             criteriaStr += (",").join(criteria)
             criteriaStr += ' WHERE '
             criteriaStr += (" AND ").join(criteriaValue)
+        if lat and lng:
+            if len(criteria) > 0:
+                criteriaStr += (" AND ")
+                criteriaStr += "distance(point({latitude: toFloat(a.lat), longitude:toFloat(a.lng)}), point({latitude: toFloat($lat), longitude:  toFloat($lng)})) <= "
+                criteriaStr += str(meter)
+            else:
+                criteriaStr += " WHERE "
+                criteriaStr += "distance(point({latitude: toFloat(a.lat), longitude:toFloat(a.lng)}), point({latitude: toFloat($lat), longitude:  toFloat($lng)})) <= "
+                criteriaStr += str(meter)
 
         db = get_db()
         if skip and limit:
             result = get_doctors(db.graph, criteriaStr, sortStr,
-                                 language, insurance, specialty, skip, limit)
+                                 language, insurance, specialty, lat, lng, skip, limit)
         else:
             result = get_doctors(db.graph, criteriaStr, sortStr,
-                                 language, insurance, specialty)
+                                 language, insurance, specialty, lat, lng)
         countResult = get_doctors_count(
-            db.graph, criteriaStr, language, insurance, specialty)
+            db.graph, criteriaStr, language, insurance, specialty, lat, lng)
         count = 0
         if len(countResult) != 0:
             count = countResult[0]['count']
