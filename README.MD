@@ -1,1 +1,3 @@
-sudo docker exec -it neo4j bash , # cypher-shell -u neo4j -p test
+running locally:
+pip install requirements.txt
+gunicorn -c gunicorn.py --reload "zocdoc-cc.app:create_app()"
